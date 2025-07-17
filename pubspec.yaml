@@ -1,6 +1,6 @@
 name: dart_analysis
 description: A command-line tool to find unused files in a Dart/Flutter project.
-version: 1.0.0
+version: 0.0.1
 
 environment:
   sdk: ^3.8.1
