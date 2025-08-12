@@ -29,20 +29,20 @@ void main(List<String> arguments) async {
   if (arguments.any((arg) => arg == '-h' || arg == '--help')) {
     print('Dart Analysis Tool');
     print('');
-    print('Usage: dart run bin/dart_analysis.dart <path_to_project>');
+    print('Usage: dart_analysis <path_to_project>');
     print('');
     print('Options:');
     print('  -h, --help     Show this help message');
     print('  -v, --version  Show version information');
     print('');
     print('Examples:');
-    print('  dart run bin/dart_analysis.dart /path/to/flutter/project');
-    print('  dart run bin/dart_analysis.dart .');
+    print('  dart_analysis /path/to/flutter/project');
+    print('  dart_analysis .');
     exit(0);
   }
 
   if (arguments.isEmpty) {
-    print('Usage: dart run bin/dart_analysis.dart <path_to_project>');
+    print('Usage: dart_analysis <path_to_project>');
     print('Use --help for more information');
     exit(1);
   }

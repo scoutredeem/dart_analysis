@@ -1,6 +1,9 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:interact_cli/interact_cli.dart';
+import 'package:analyzer/dart/analysis/utilities.dart';
+import 'package:analyzer/dart/ast/ast.dart';
 import 'base_analyzer.dart';
 import 'utils.dart';
 
@@ -94,7 +97,7 @@ class UnusedTranslationFinder implements BaseAnalyzer {
     final libPath = p.join(projectPath, 'lib');
 
     // Find all localization files
-    final localizationFiles = _findLocalizationFiles(libPath);
+    final localizationFiles = findLocalizationFiles(libPath);
     if (localizationFiles.isEmpty) {
       print('No localization files found.');
       return;
@@ -108,7 +111,7 @@ class UnusedTranslationFinder implements BaseAnalyzer {
     // Find all translation keys
     final allTranslationKeys = <String>{};
     for (final file in localizationFiles) {
-      allTranslationKeys.addAll(_extractTranslationKeys(file));
+      allTranslationKeys.addAll(extractTranslationKeys(file));
     }
 
     if (allTranslationKeys.isEmpty) {
@@ -119,10 +122,10 @@ class UnusedTranslationFinder implements BaseAnalyzer {
     print('\nFound ${allTranslationKeys.length} translation keys.');
 
     // Find all Dart files to analyze for usage
-    final allDartFiles = _getAllDartFiles(libPath);
+    final allDartFiles = getAllDartFiles(libPath);
 
     // Find used translation keys
-    final usedKeys = _findUsedTranslationKeys(allDartFiles, allTranslationKeys);
+    final usedKeys = findUsedTranslationKeys(allDartFiles, allTranslationKeys);
     final unusedKeys = allTranslationKeys.difference(usedKeys);
 
     if (unusedKeys.isEmpty) {
@@ -152,7 +155,7 @@ class UnusedTranslationFinder implements BaseAnalyzer {
   }
 
   /// Find all localization files in the project using l10n.yaml configuration
-  Set<String> _findLocalizationFiles(String libPath) {
+  Set<String> findLocalizationFiles(String libPath) {
     final files = <String>{};
     final projectPath = p.dirname(libPath);
 
@@ -246,7 +249,7 @@ class UnusedTranslationFinder implements BaseAnalyzer {
   }
 
   /// Extract translation keys from an ARB file
-  Set<String> _extractTranslationKeys(String filePath) {
+  Set<String> extractTranslationKeys(String filePath) {
     final keys = <String>{};
 
     try {
@@ -260,7 +263,7 @@ class UnusedTranslationFinder implements BaseAnalyzer {
         final key = match.group(1);
         if (key != null && !key.startsWith('@')) {
           // Check if this key is actually a translation key (not a metadata property)
-          if (_isTranslationKey(content, key)) {
+          if (isTranslationKey(content, key)) {
             keys.add(key);
           }
         }
@@ -273,7 +276,7 @@ class UnusedTranslationFinder implements BaseAnalyzer {
   }
 
   /// Check if a key is actually a translation key (not a metadata property)
-  bool _isTranslationKey(String content, String key) {
+  bool isTranslationKey(String content, String key) {
     // Common metadata properties that should not be considered translation keys
     final metadataProperties = [
       'description',
@@ -304,7 +307,7 @@ class UnusedTranslationFinder implements BaseAnalyzer {
   }
 
   /// Get all Dart files in the lib directory
-  Set<String> _getAllDartFiles(String libPath) {
+  Set<String> getAllDartFiles(String libPath) {
     return AnalyzerUtils.getAllFilesRecursively(
       Directory(libPath),
       extensions: ['.dart'],
@@ -312,7 +315,7 @@ class UnusedTranslationFinder implements BaseAnalyzer {
   }
 
   /// Find which translation keys are actually used in the code
-  Set<String> _findUsedTranslationKeys(
+  Set<String> findUsedTranslationKeys(
     Set<String> dartFiles,
     Set<String> allKeys,
   ) {
@@ -322,26 +325,69 @@ class UnusedTranslationFinder implements BaseAnalyzer {
       try {
         final content = File(filePath).readAsStringSync();
 
-        // Look for usage patterns
+        // Use comprehensive regex-based detection for reliability
         for (final key in allKeys) {
-          if (_isKeyUsedInContent(content, key)) {
+          if (isKeyUsedInContent(content, key)) {
             usedKeys.add(key);
           }
         }
       } catch (e) {
         // Ignore files that can't be read
+        print('Warning: Could not read file $filePath: $e');
       }
     }
 
     return usedKeys;
   }
 
+  /// Extract all identifiers from the AST
+  void _extractIdentifiers(AstNode node, Set<String> identifiers) {
+    if (node is Identifier) {
+      identifiers.add(node.name);
+    }
+
+    for (final child in node.childEntities) {
+      if (child is AstNode) {
+        _extractIdentifiers(child, identifiers);
+      }
+    }
+  }
+
+  /// Check if a key usage looks like a translation key usage
+  bool _isTranslationKeyUsage(String content, String key) {
+    // Look for the key in context that suggests translation usage
+    final patterns = [
+      RegExp('AppLocalizations\\.of\\([^)]+\\)\\.$key\\b'),
+      RegExp('AppLocalizations\\.of\\([^)]+\\)\\?\\.$key\\b'),
+      RegExp('context\\.translation\\.$key\\b'),
+      RegExp('context\\.tr\\.$key\\b'),
+      RegExp('\\btr\\.$key\\b'),
+    ];
+
+    for (final pattern in patterns) {
+      if (pattern.hasMatch(content)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   /// Check if a translation key is used in the given content
-  bool _isKeyUsedInContent(String content, String key) {
+  bool isKeyUsedInContent(String content, String key) {
     // Look for various usage patterns
     final patterns = [
       // AppLocalizations.of(context).keyName
       RegExp('AppLocalizations\\.of\\([^)]+\\)\\.$key\\b'),
+      // AppLocalizations.of(context)?.keyName (nullable access)
+      RegExp('AppLocalizations\\.of\\([^)]+\\)\\?\\.$key\\b'),
+      // context.translation.keyName (extension method - property access)
+      RegExp('context\\s*\\.\\s*translation\\s*\\.\\s*$key\\b', dotAll: true),
+      // context.translation.keyName() (extension method - method call)
+      RegExp(
+        'context\\.translation\\s*\\.\\s*$key\\s*\\([^)]*\\)',
+        dotAll: true,
+      ),
       // context.localizations.keyName
       RegExp('context\\.localizations\\.$key\\b'),
       // localizations.keyName
@@ -354,6 +400,8 @@ class UnusedTranslationFinder implements BaseAnalyzer {
       RegExp('S\\.current\\.$key\\b'),
       // context.tr.keyName (extension method)
       RegExp('context\\.tr\\.$key\\b'),
+      // tr.keyName (when tr is a variable)
+      RegExp('\\btr\\.$key\\b'),
     ];
 
     for (final pattern in patterns) {
@@ -381,7 +429,7 @@ class UnusedTranslationFinder implements BaseAnalyzer {
         // Remove unused keys from the ARB content
         var modifiedContent = content;
         for (final key in unusedKeys) {
-          modifiedContent = _removeKeyFromArbContent(modifiedContent, key);
+          modifiedContent = removeKeyFromArbContent(modifiedContent, key);
         }
 
         // Only write if content changed
@@ -406,30 +454,51 @@ class UnusedTranslationFinder implements BaseAnalyzer {
   }
 
   /// Remove a specific key from ARB content
-  String _removeKeyFromArbContent(String content, String key) {
-    var modifiedContent = content;
+  String removeKeyFromArbContent(String content, String key) {
+    try {
+      // Parse the content as JSON to handle complex structures properly
+      final Map<String, dynamic> jsonData = json.decode(content);
 
-    // Remove the key-value pair: "keyName": "value",
-    final keyValuePattern = RegExp('"$key"\\s*:\\s*"[^"]*",?\\s*');
-    modifiedContent = modifiedContent.replaceAll(keyValuePattern, '');
+      // Remove the key and its metadata
+      jsonData.remove(key);
+      jsonData.remove('@$key');
 
-    // Remove the metadata object: "@keyName": { ... },
-    // This handles the entire metadata block including nested properties like description, placeholders, etc.
-    // Use a more robust pattern that handles nested braces properly
-    final metadataPattern = RegExp(
-      '"@$key"\\s*:\\s*\\{[^}]*\\},?\\s*',
-      dotAll: true,
-    );
-    modifiedContent = modifiedContent.replaceAll(metadataPattern, '');
+      // Convert back to JSON with proper formatting
+      final encoder = JsonEncoder.withIndent('  ');
+      return encoder.convert(jsonData);
+    } catch (e) {
+      // Fallback to regex-based approach if JSON parsing fails
+      print('Warning: JSON parsing failed, falling back to regex: $e');
+      return _removeKeyFromArbContentRegex(content, key);
+    }
+  }
+
+  /// Fallback regex-based removal method
+  String _removeKeyFromArbContentRegex(String content, String key) {
+    // First, find and remove the key-value pair
+    final keyPattern = RegExp('\\s*"$key"\\s*:\\s*"[^"]*",?\\s*');
+    var result = content.replaceAll(keyPattern, '');
+
+    // Then remove the metadata block if it exists
+    result = _removeMetadataBlock(result, key);
 
     // Clean up the JSON structure
-    modifiedContent = _cleanupArbContent(modifiedContent);
+    result = cleanupArbContent(result);
 
-    return modifiedContent;
+    return result;
+  }
+
+  /// Remove the metadata block for a specific key
+  String _removeMetadataBlock(String content, String key) {
+    final metadataPattern = RegExp(
+      '\\s*"@$key"\\s*:\\s*\\{[^}]*\\},?\\s*',
+      dotAll: true,
+    );
+    return content.replaceAll(metadataPattern, '');
   }
 
   /// Clean up ARB content after removing keys
-  String _cleanupArbContent(String content) {
+  String cleanupArbContent(String content) {
     // Remove multiple consecutive empty lines
     content = content.replaceAll(RegExp(r'\n\s*\n\s*\n'), '\n\n');
 
@@ -437,8 +506,15 @@ class UnusedTranslationFinder implements BaseAnalyzer {
     content = content.replaceAll(RegExp(r',\s*}'), '}');
     content = content.replaceAll(RegExp(r',\s*]'), ']');
 
+    // Fix missing commas between properties
+    content = content.replaceAll(RegExp(r'}\s*\n\s*"'), '},\n  "');
+    content = content.replaceAll(RegExp(r'"\s*\n\s*"'), '",\n  "');
+
     // Remove empty lines between properties
     content = content.replaceAll(RegExp(r'\n\s*\n'), '\n');
+
+    // Clean up any double commas
+    content = content.replaceAll(RegExp(r',\s*,+'), ',');
 
     return content;
   }

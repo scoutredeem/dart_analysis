@@ -31,7 +31,7 @@ class UnusedFileFinder implements BaseAnalyzer {
     }
 
     // Read package name from the TARGET project's pubspec.yaml
-    final packageName = _getPackageName(projectPath);
+    final packageName = getPackageName(projectPath);
     if (packageName == null) {
       print(
         'Error: Could not determine package name from target project pubspec.yaml.',
@@ -39,7 +39,7 @@ class UnusedFileFinder implements BaseAnalyzer {
       exit(1);
     }
 
-    final allDartFiles = _getAllDartFiles(libPath);
+    final allDartFiles = getAllDartFiles(libPath);
     final usedFiles = _findUsedFiles(projectPath, libPath, packageName);
     final unusedFiles = allDartFiles.difference(usedFiles);
 
@@ -47,12 +47,12 @@ class UnusedFileFinder implements BaseAnalyzer {
   }
 
   /// Get package name from pubspec.yaml
-  String? _getPackageName(String projectPath) {
+  String? getPackageName(String projectPath) {
     return AnalyzerUtils.getPackageName(projectPath);
   }
 
   /// Get all Dart files in the lib directory
-  Set<String> _getAllDartFiles(String libPath) {
+  Set<String> getAllDartFiles(String libPath) {
     return Directory(libPath)
         .listSync(recursive: true)
         .where((entity) => entity is File && entity.path.endsWith('.dart'))
@@ -69,11 +69,11 @@ class UnusedFileFinder implements BaseAnalyzer {
     final pubspecFile = File(p.join(projectPath, 'pubspec.yaml'));
     final pubspecContent = pubspecFile.readAsStringSync();
 
-    final allDartFiles = _getAllDartFiles(libPath);
+    final allDartFiles = getAllDartFiles(libPath);
     final usedFiles = <String>{};
 
     // Start analysis from main.dart or other entry points if specified
-    final entryPoints = _findEntryPoints(allDartFiles, libPath, pubspecContent);
+    final entryPoints = findEntryPoints(allDartFiles, libPath, pubspecContent);
     if (entryPoints.isEmpty) {
       print(
         'Error: No entry point found. Could not determine the main.dart file.',
@@ -94,7 +94,7 @@ class UnusedFileFinder implements BaseAnalyzer {
   }
 
   /// Find entry points for analysis
-  List<String> _findEntryPoints(
+  List<String> findEntryPoints(
     Set<String> allDartFiles,
     String libPath,
     String pubspecContent,
@@ -136,7 +136,7 @@ class UnusedFileFinder implements BaseAnalyzer {
       if (directive is ImportDirective) {
         final uri = directive.uri.stringValue;
         if (uri != null && !uri.startsWith('dart:')) {
-          final importedFilePath = _resolveUri(
+          final importedFilePath = resolveUri(
             uri,
             filePath,
             libPath,
@@ -156,7 +156,7 @@ class UnusedFileFinder implements BaseAnalyzer {
   }
 
   /// Resolve import URIs to file paths
-  String? _resolveUri(
+  String? resolveUri(
     String uri,
     String fromFile,
     String libPath,
