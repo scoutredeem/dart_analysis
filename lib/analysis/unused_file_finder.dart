@@ -3,161 +3,230 @@ import 'package:path/path.dart' as p;
 import 'package:analyzer/dart/analysis/utilities.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:interact_cli/interact_cli.dart';
+import 'base_analyzer.dart';
+import 'utils.dart';
 
-/// Finds and handles unused Dart files in the given project path.
-Future<void> findAndHandleUnusedFiles(String projectPath) async {
-  final libPath = p.join(projectPath, 'lib');
+/// Analyzer that finds and handles unused Dart files in a project
+class UnusedFileFinder implements BaseAnalyzer {
+  @override
+  String get name => 'Unused file finder';
 
-  if (!Directory(libPath).existsSync()) {
-    print('Error: lib directory not found in the specified project path.');
-    exit(1);
+  @override
+  String get description =>
+      'Find and optionally delete unused Dart files in your project';
+
+  @override
+  bool canAnalyze(String projectPath) {
+    final libPath = p.join(projectPath, 'lib');
+    return Directory(libPath).existsSync();
   }
 
-  // Read package name from the TARGET project's pubspec.yaml
-  final pubspecFile = File(p.join(projectPath, 'pubspec.yaml'));
-  final pubspecContent = pubspecFile.readAsStringSync();
-  final packageNameMatch = RegExp(
-    r'^name:\s*(\S+)',
-    multiLine: true,
-  ).firstMatch(pubspecContent);
-  final packageName = packageNameMatch?.group(1);
-  if (packageName == null) {
-    print(
-      'Error: Could not determine package name from target project pubspec.yaml.',
-    );
-    exit(1);
-  }
+  @override
+  Future<void> analyze(String projectPath) async {
+    final libPath = p.join(projectPath, 'lib');
 
-  final allDartFiles = Directory(libPath)
-      .listSync(recursive: true)
-      .where((entity) => entity is File && entity.path.endsWith('.dart'))
-      .map((entity) => p.normalize(p.absolute(entity.path)))
-      .toSet();
-
-  final usedFiles = <String>{};
-
-  // Start analysis from main.dart or other entry points if specified
-  final entryPoints = allDartFiles
-      .where((file) => p.basename(file) == 'main.dart')
-      .toList();
-  if (entryPoints.isEmpty) {
-    if (pubspecContent.contains('flutter:')) {
-      // Flutter project, assume lib/main.dart is the entry point
-      final mainDart = p.join(libPath, 'main.dart');
-      if (File(mainDart).existsSync()) {
-        entryPoints.add(mainDart);
-      }
+    if (!canAnalyze(projectPath)) {
+      print('Error: lib directory not found in the specified project path.');
+      exit(1);
     }
-  }
 
-  if (entryPoints.isEmpty) {
-    print(
-      'Error: No entry point found. Could not determine the main.dart file.',
-    );
-    exit(1);
-  }
-
-  for (final entryPoint in entryPoints) {
-    _findUsedFiles(
-      p.normalize(p.absolute(entryPoint)),
-      usedFiles,
-      libPath,
-      packageName,
-    );
-  }
-
-  final unusedFiles = allDartFiles.difference(usedFiles);
-
-  if (unusedFiles.isEmpty) {
-    print('No unused files found.');
-  } else {
-    print('Unused files:');
-    final relativeUnused = unusedFiles
-        .map((file) => p.relative(file, from: projectPath))
-        .toList();
-    for (final file in relativeUnused) {
-      print(file);
-    }
-    final deleteChoice = Confirm(
-      prompt: 'Do you want to delete these unused files?',
-      defaultValue: false,
-    ).interact();
-    if (deleteChoice) {
-      for (final file in unusedFiles) {
-        try {
-          File(file).deleteSync();
-          print('Deleted: ${p.relative(file, from: projectPath)}');
-        } catch (e) {
-          print(
-            'Failed to delete: ${p.relative(file, from: projectPath)} ( [31m$e [0m)',
-          );
-        }
-      }
-      print('Unused files deleted.');
-    } else {
-      print('No files were deleted.');
-    }
-  }
-}
-
-void _findUsedFiles(
-  String filePath,
-  Set<String> usedFiles,
-  String libPath,
-  String packageName,
-) {
-  filePath = p.normalize(p.absolute(filePath));
-  if (!usedFiles.add(filePath)) {
-    return;
-  }
-
-  final fileContent = File(filePath).readAsStringSync();
-  final result = parseString(content: fileContent, throwIfDiagnostics: false);
-  final compilationUnit = result.unit;
-
-  for (final directive in compilationUnit.directives) {
-    if (directive is ImportDirective) {
-      final uri = directive.uri.stringValue;
-      if (uri != null && !uri.startsWith('dart:')) {
-        final importedFilePath = _resolveUri(
-          uri,
-          filePath,
-          libPath,
-          packageName,
-        );
-        if (importedFilePath != null) {
-          _findUsedFiles(importedFilePath, usedFiles, libPath, packageName);
-        }
-      }
-    }
-  }
-}
-
-String? _resolveUri(
-  String uri,
-  String fromFile,
-  String libPath,
-  String packageName,
-) {
-  if (uri.startsWith('package:')) {
-    // Example: package:my_package/src/foo.dart
-    final match = RegExp(r'^package:([^/]+)/(.*)').firstMatch(uri);
-    if (match != null && match.group(1) == packageName) {
-      final relativePath = match.group(2)!;
-      final absolutePath = p.normalize(
-        p.absolute(p.join(libPath, relativePath)),
+    // Read package name from the TARGET project's pubspec.yaml
+    final packageName = _getPackageName(projectPath);
+    if (packageName == null) {
+      print(
+        'Error: Could not determine package name from target project pubspec.yaml.',
       );
+      exit(1);
+    }
+
+    final allDartFiles = _getAllDartFiles(libPath);
+    final usedFiles = _findUsedFiles(projectPath, libPath, packageName);
+    final unusedFiles = allDartFiles.difference(usedFiles);
+
+    _handleUnusedFiles(unusedFiles, projectPath);
+  }
+
+  /// Get package name from pubspec.yaml
+  String? _getPackageName(String projectPath) {
+    return AnalyzerUtils.getPackageName(projectPath);
+  }
+
+  /// Get all Dart files in the lib directory
+  Set<String> _getAllDartFiles(String libPath) {
+    return Directory(libPath)
+        .listSync(recursive: true)
+        .where((entity) => entity is File && entity.path.endsWith('.dart'))
+        .map((entity) => p.normalize(p.absolute(entity.path)))
+        .toSet();
+  }
+
+  /// Find all used files by analyzing imports
+  Set<String> _findUsedFiles(
+    String projectPath,
+    String libPath,
+    String packageName,
+  ) {
+    final pubspecFile = File(p.join(projectPath, 'pubspec.yaml'));
+    final pubspecContent = pubspecFile.readAsStringSync();
+
+    final allDartFiles = _getAllDartFiles(libPath);
+    final usedFiles = <String>{};
+
+    // Start analysis from main.dart or other entry points if specified
+    final entryPoints = _findEntryPoints(allDartFiles, libPath, pubspecContent);
+    if (entryPoints.isEmpty) {
+      print(
+        'Error: No entry point found. Could not determine the main.dart file.',
+      );
+      exit(1);
+    }
+
+    for (final entryPoint in entryPoints) {
+      _traverseUsedFiles(
+        p.normalize(p.absolute(entryPoint)),
+        usedFiles,
+        libPath,
+        packageName,
+      );
+    }
+
+    return usedFiles;
+  }
+
+  /// Find entry points for analysis
+  List<String> _findEntryPoints(
+    Set<String> allDartFiles,
+    String libPath,
+    String pubspecContent,
+  ) {
+    final entryPoints = allDartFiles
+        .where((file) => p.basename(file) == 'main.dart')
+        .toList();
+
+    if (entryPoints.isEmpty) {
+      if (pubspecContent.contains('flutter:')) {
+        // Flutter project, assume lib/main.dart is the entry point
+        final mainDart = p.join(libPath, 'main.dart');
+        if (File(mainDart).existsSync()) {
+          entryPoints.add(mainDart);
+        }
+      }
+    }
+
+    return entryPoints;
+  }
+
+  /// Traverse and find all used files recursively
+  void _traverseUsedFiles(
+    String filePath,
+    Set<String> usedFiles,
+    String libPath,
+    String packageName,
+  ) {
+    filePath = p.normalize(p.absolute(filePath));
+    if (!usedFiles.add(filePath)) {
+      return;
+    }
+
+    final fileContent = File(filePath).readAsStringSync();
+    final result = parseString(content: fileContent, throwIfDiagnostics: false);
+    final compilationUnit = result.unit;
+
+    for (final directive in compilationUnit.directives) {
+      if (directive is ImportDirective) {
+        final uri = directive.uri.stringValue;
+        if (uri != null && !uri.startsWith('dart:')) {
+          final importedFilePath = _resolveUri(
+            uri,
+            filePath,
+            libPath,
+            packageName,
+          );
+          if (importedFilePath != null) {
+            _traverseUsedFiles(
+              importedFilePath,
+              usedFiles,
+              libPath,
+              packageName,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  /// Resolve import URIs to file paths
+  String? _resolveUri(
+    String uri,
+    String fromFile,
+    String libPath,
+    String packageName,
+  ) {
+    if (uri.startsWith('package:')) {
+      // Example: package:my_package/src/foo.dart
+      final match = RegExp(r'^package:([^/]+)/(.*)').firstMatch(uri);
+      if (match != null && match.group(1) == packageName) {
+        final relativePath = match.group(2)!;
+        final absolutePath = p.normalize(
+          p.absolute(p.join(libPath, relativePath)),
+        );
+        if (File(absolutePath).existsSync()) {
+          return absolutePath;
+        }
+      }
+      return null;
+    } else {
+      final fromDir = p.dirname(fromFile);
+      final absolutePath = p.normalize(p.absolute(p.join(fromDir, uri)));
       if (File(absolutePath).existsSync()) {
         return absolutePath;
       }
     }
     return null;
-  } else {
-    final fromDir = p.dirname(fromFile);
-    final absolutePath = p.normalize(p.absolute(p.join(fromDir, uri)));
-    if (File(absolutePath).existsSync()) {
-      return absolutePath;
+  }
+
+  /// Handle the unused files (show results and optionally delete)
+  void _handleUnusedFiles(Set<String> unusedFiles, String projectPath) {
+    if (unusedFiles.isEmpty) {
+      print('No unused files found.');
+    } else {
+      print('Unused files:');
+      final relativeUnused = AnalyzerUtils.formatFilePaths(
+        unusedFiles,
+        projectPath,
+      );
+      for (final file in relativeUnused) {
+        print(file);
+      }
+
+      final deleteChoice = Confirm(
+        prompt: 'Do you want to delete these unused files?',
+        defaultValue: false,
+      ).interact();
+
+      if (deleteChoice) {
+        _deleteUnusedFiles(unusedFiles, projectPath);
+      } else {
+        print('No files were deleted.');
+      }
     }
   }
-  return null;
+
+  /// Delete the unused files
+  void _deleteUnusedFiles(Set<String> unusedFiles, String projectPath) {
+    int deletedCount = 0;
+    for (final file in unusedFiles) {
+      if (AnalyzerUtils.deleteFile(file, projectPath)) {
+        deletedCount++;
+      }
+    }
+    print('Unused files deleted: $deletedCount');
+  }
+}
+
+/// Legacy function for backward compatibility
+@Deprecated('Use UnusedFileFinder().analyze() instead')
+Future<void> findAndHandleUnusedFiles(String projectPath) async {
+  final finder = UnusedFileFinder();
+  await finder.analyze(projectPath);
 }

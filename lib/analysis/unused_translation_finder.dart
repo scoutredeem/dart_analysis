@@ -1,0 +1,496 @@
+import 'dart:io';
+import 'package:path/path.dart' as p;
+import 'package:interact_cli/interact_cli.dart';
+import 'base_analyzer.dart';
+import 'utils.dart';
+
+/// Analyzer that finds and handles unused translation strings in a Flutter project
+class UnusedTranslationFinder implements BaseAnalyzer {
+  @override
+  String get name => 'Unused translation finder';
+
+  @override
+  String get description =>
+      'Find and optionally delete unused translation strings in your Flutter project';
+
+  @override
+  bool canAnalyze(String projectPath) {
+    return AnalyzerUtils.isFlutterProject(projectPath) &&
+        _hasLocalizationFiles(projectPath);
+  }
+
+  bool _hasLocalizationFiles(String projectPath) {
+    // Check for l10n.yaml file first (Flutter standard)
+    final l10nYamlFile = File(p.join(projectPath, 'l10n.yaml'));
+    if (l10nYamlFile.existsSync()) {
+      return true;
+    }
+
+    // Fallback: Look for common localization file patterns
+    final libPath = p.join(projectPath, 'lib');
+    if (!Directory(libPath).existsSync()) return false;
+
+    final localizationPatterns = [
+      '**/localization/*.arb',
+      '**/l10n/*.arb',
+      '**/i18n/*.arb',
+      '**/app_*.arb',
+      '**/localizations.arb',
+    ];
+
+    for (final pattern in localizationPatterns) {
+      if (_hasFilesMatchingPattern(libPath, pattern)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  bool _hasFilesMatchingPattern(String libPath, String pattern) {
+    try {
+      final dir = Directory(libPath);
+      final entities = dir.listSync(recursive: true);
+
+      for (final entity in entities) {
+        if (entity is File && entity.path.endsWith('.arb')) {
+          final relativePath = p.relative(entity.path, from: libPath);
+          if (_matchesPattern(relativePath, pattern)) {
+            return true;
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+    return false;
+  }
+
+  bool _matchesPattern(String path, String pattern) {
+    // Simple pattern matching for common cases
+    if (pattern == '**/localization/*.arb') {
+      return path.contains('localization') && path.endsWith('.arb');
+    } else if (pattern == '**/l10n/*.arb') {
+      return path.contains('l10n') && path.endsWith('.arb');
+    } else if (pattern == '**/i18n/*.arb') {
+      return path.contains('i18n') && path.endsWith('.arb');
+    } else if (pattern == '**/app_*.arb') {
+      return path.contains('app_') && path.endsWith('.arb');
+    } else if (pattern == '**/localizations.arb') {
+      return path.endsWith('localizations.arb');
+    }
+    return false;
+  }
+
+  @override
+  Future<void> analyze(String projectPath) async {
+    if (!canAnalyze(projectPath)) {
+      print(
+        'Error: This project does not appear to be a Flutter project with localization files.',
+      );
+      exit(1);
+    }
+
+    final libPath = p.join(projectPath, 'lib');
+
+    // Find all localization files
+    final localizationFiles = _findLocalizationFiles(libPath);
+    if (localizationFiles.isEmpty) {
+      print('No localization files found.');
+      return;
+    }
+
+    print('Found localization files:');
+    for (final file in localizationFiles) {
+      print('  ${p.relative(file, from: projectPath)}');
+    }
+
+    // Find all translation keys
+    final allTranslationKeys = <String>{};
+    for (final file in localizationFiles) {
+      allTranslationKeys.addAll(_extractTranslationKeys(file));
+    }
+
+    if (allTranslationKeys.isEmpty) {
+      print('No translation keys found in localization files.');
+      return;
+    }
+
+    print('\nFound ${allTranslationKeys.length} translation keys.');
+
+    // Find all Dart files to analyze for usage
+    final allDartFiles = _getAllDartFiles(libPath);
+
+    // Find used translation keys
+    final usedKeys = _findUsedTranslationKeys(allDartFiles, allTranslationKeys);
+    final unusedKeys = allTranslationKeys.difference(usedKeys);
+
+    if (unusedKeys.isEmpty) {
+      print('No unused translation keys found.');
+    } else {
+      print('\nUnused translation keys:');
+      final sortedUnusedKeys = unusedKeys.toList()..sort();
+      for (final key in sortedUnusedKeys) {
+        print('  $key');
+      }
+
+      final deleteChoice = Confirm(
+        prompt: 'Do you want to remove these unused translation keys?',
+        defaultValue: false,
+      ).interact();
+
+      if (deleteChoice) {
+        _removeUnusedTranslationKeys(
+          localizationFiles,
+          unusedKeys,
+          projectPath,
+        );
+      } else {
+        print('No translation keys were removed.');
+      }
+    }
+  }
+
+  /// Find all localization files in the project using l10n.yaml configuration
+  Set<String> _findLocalizationFiles(String libPath) {
+    final files = <String>{};
+    final projectPath = p.dirname(libPath);
+
+    try {
+      // First try to use l10n.yaml configuration
+      final l10nYamlFile = File(p.join(projectPath, 'l10n.yaml'));
+      if (l10nYamlFile.existsSync()) {
+        final l10nConfig = _parseL10nYaml(l10nYamlFile);
+        if (l10nConfig != null) {
+          final arbDir = l10nConfig['arb-dir'] as String?;
+          if (arbDir != null) {
+            final arbDirPath = p.join(projectPath, arbDir);
+            if (Directory(arbDirPath).existsSync()) {
+              // Find all .arb files in the configured directory
+              final arbDirEntity = Directory(arbDirPath);
+              for (final entity in arbDirEntity.listSync()) {
+                if (entity is File && entity.path.endsWith('.arb')) {
+                  files.add(p.normalize(p.absolute(entity.path)));
+                }
+              }
+              return files;
+            }
+          }
+        }
+      }
+
+      // Fallback: search for ARB files manually
+      final dir = Directory(libPath);
+      final entities = dir.listSync(recursive: true);
+
+      for (final entity in entities) {
+        if (entity is File && entity.path.endsWith('.arb')) {
+          final relativePath = p.relative(entity.path, from: libPath);
+          if (_isLocalizationFile(relativePath)) {
+            files.add(p.normalize(p.absolute(entity.path)));
+          }
+        }
+      }
+    } catch (e) {
+      print('Warning: Could not read lib directory: $e');
+    }
+
+    return files;
+  }
+
+  /// Check if a file is a localization file
+  bool _isLocalizationFile(String relativePath) {
+    return relativePath.contains('localization') ||
+        relativePath.contains('l10n') ||
+        relativePath.contains('i18n') ||
+        relativePath.contains('app_') ||
+        relativePath.endsWith('localizations.arb') ||
+        relativePath.endsWith('.arb');
+  }
+
+  /// Parse l10n.yaml configuration file
+  Map<String, dynamic>? _parseL10nYaml(File l10nYamlFile) {
+    try {
+      final content = l10nYamlFile.readAsStringSync();
+
+      // Simple YAML parsing for the common l10n.yaml structure
+      final config = <String, dynamic>{};
+
+      for (final line in content.split('\n')) {
+        final trimmedLine = line.trim();
+        if (trimmedLine.isEmpty || trimmedLine.startsWith('#')) continue;
+
+        if (trimmedLine.contains(':')) {
+          final parts = trimmedLine.split(':');
+          if (parts.length >= 2) {
+            final key = parts[0].trim();
+            final value = parts.sublist(1).join(':').trim();
+
+            // Handle boolean values
+            if (value == 'true') {
+              config[key] = true;
+            } else if (value == 'false') {
+              config[key] = false;
+            } else {
+              config[key] = value;
+            }
+          }
+        }
+      }
+
+      return config;
+    } catch (e) {
+      print('Warning: Could not parse l10n.yaml: $e');
+      return null;
+    }
+  }
+
+  /// Extract translation keys from an ARB file
+  Set<String> _extractTranslationKeys(String filePath) {
+    final keys = <String>{};
+
+    try {
+      final content = File(filePath).readAsStringSync();
+
+      // Parse JSON/ARB content to extract translation keys
+      // Look for "keyName": "value" patterns (excluding metadata keys that start with @)
+      // Also exclude keys that are just metadata properties like "description", "placeholders", etc.
+      final keyPattern = RegExp(r'"([^"@][^"]*)"\s*:\s*"[^"]*"');
+      for (final match in keyPattern.allMatches(content)) {
+        final key = match.group(1);
+        if (key != null && !key.startsWith('@')) {
+          // Check if this key is actually a translation key (not a metadata property)
+          if (_isTranslationKey(content, key)) {
+            keys.add(key);
+          }
+        }
+      }
+    } catch (e) {
+      print('Warning: Could not read file $filePath: $e');
+    }
+
+    return keys;
+  }
+
+  /// Check if a key is actually a translation key (not a metadata property)
+  bool _isTranslationKey(String content, String key) {
+    // Common metadata properties that should not be considered translation keys
+    final metadataProperties = [
+      'description',
+      'placeholders',
+      'context',
+      'meaning',
+      'example',
+      'sourceLocale',
+      'isObsolete',
+      'requiredResourceAttributes',
+    ];
+
+    // If it's a known metadata property, it's not a translation key
+    if (metadataProperties.contains(key)) {
+      return false;
+    }
+
+    // Check if this key appears in a metadata context (inside @keyName blocks)
+    // If it does, it's likely a metadata property, not a translation key
+    final metadataContextPattern = RegExp(
+      '"@[^"]*"\\s*:\\s*\\{[^}]*"$key"\\s*:',
+    );
+    if (metadataContextPattern.hasMatch(content)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /// Get all Dart files in the lib directory
+  Set<String> _getAllDartFiles(String libPath) {
+    return AnalyzerUtils.getAllFilesRecursively(
+      Directory(libPath),
+      extensions: ['.dart'],
+    );
+  }
+
+  /// Find which translation keys are actually used in the code
+  Set<String> _findUsedTranslationKeys(
+    Set<String> dartFiles,
+    Set<String> allKeys,
+  ) {
+    final usedKeys = <String>{};
+
+    for (final filePath in dartFiles) {
+      try {
+        final content = File(filePath).readAsStringSync();
+
+        // Look for usage patterns
+        for (final key in allKeys) {
+          if (_isKeyUsedInContent(content, key)) {
+            usedKeys.add(key);
+          }
+        }
+      } catch (e) {
+        // Ignore files that can't be read
+      }
+    }
+
+    return usedKeys;
+  }
+
+  /// Check if a translation key is used in the given content
+  bool _isKeyUsedInContent(String content, String key) {
+    // Look for various usage patterns
+    final patterns = [
+      // AppLocalizations.of(context).keyName
+      RegExp('AppLocalizations\\.of\\([^)]+\\)\\.$key\\b'),
+      // context.localizations.keyName
+      RegExp('context\\.localizations\\.$key\\b'),
+      // localizations.keyName
+      RegExp('localizations\\.$key\\b'),
+      // l10n.keyName
+      RegExp('l10n\\.$key\\b'),
+      // S.of(context).keyName
+      RegExp('S\\.of\\([^)]+\\)\\.$key\\b'),
+      // S.current.keyName
+      RegExp('S\\.current\\.$key\\b'),
+      // context.tr.keyName (extension method)
+      RegExp('context\\.tr\\.$key\\b'),
+    ];
+
+    for (final pattern in patterns) {
+      if (pattern.hasMatch(content)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /// Remove unused translation keys from ARB files and regenerate Dart files
+  void _removeUnusedTranslationKeys(
+    Set<String> localizationFiles,
+    Set<String> unusedKeys,
+    String projectPath,
+  ) {
+    int removedCount = 0;
+
+    for (final filePath in localizationFiles) {
+      try {
+        final content = File(filePath).readAsStringSync();
+        final originalContent = content;
+
+        // Remove unused keys from the ARB content
+        var modifiedContent = content;
+        for (final key in unusedKeys) {
+          modifiedContent = _removeKeyFromArbContent(modifiedContent, key);
+        }
+
+        // Only write if content changed
+        if (modifiedContent != originalContent) {
+          File(filePath).writeAsStringSync(modifiedContent);
+          print('Updated ARB file: ${p.relative(filePath, from: projectPath)}');
+          removedCount++;
+        }
+      } catch (e) {
+        print(
+          'Failed to update: ${p.relative(filePath, from: projectPath)} - $e',
+        );
+      }
+    }
+
+    if (removedCount > 0) {
+      print('\nRegenerating localization files...');
+      _regenerateLocalizationFiles(projectPath);
+    }
+
+    print('Translation files updated: $removedCount');
+  }
+
+  /// Remove a specific key from ARB content
+  String _removeKeyFromArbContent(String content, String key) {
+    var modifiedContent = content;
+
+    // Remove the key-value pair: "keyName": "value",
+    final keyValuePattern = RegExp('"$key"\\s*:\\s*"[^"]*",?\\s*');
+    modifiedContent = modifiedContent.replaceAll(keyValuePattern, '');
+
+    // Remove the metadata object: "@keyName": { ... },
+    // This handles the entire metadata block including nested properties like description, placeholders, etc.
+    // Use a more robust pattern that handles nested braces properly
+    final metadataPattern = RegExp(
+      '"@$key"\\s*:\\s*\\{[^}]*\\},?\\s*',
+      dotAll: true,
+    );
+    modifiedContent = modifiedContent.replaceAll(metadataPattern, '');
+
+    // Clean up the JSON structure
+    modifiedContent = _cleanupArbContent(modifiedContent);
+
+    return modifiedContent;
+  }
+
+  /// Clean up ARB content after removing keys
+  String _cleanupArbContent(String content) {
+    // Remove multiple consecutive empty lines
+    content = content.replaceAll(RegExp(r'\n\s*\n\s*\n'), '\n\n');
+
+    // Remove trailing commas before closing braces
+    content = content.replaceAll(RegExp(r',\s*}'), '}');
+    content = content.replaceAll(RegExp(r',\s*]'), ']');
+
+    // Remove empty lines between properties
+    content = content.replaceAll(RegExp(r'\n\s*\n'), '\n');
+
+    return content;
+  }
+
+  /// Regenerate localization files using Flutter's localization generation
+  void _regenerateLocalizationFiles(String projectPath) {
+    try {
+      print('Regenerating localization files...');
+
+      // Change to the project directory
+      final originalDir = Directory.current.path;
+      Directory.current = projectPath;
+
+      // First run flutter pub get to ensure dependencies are up to date
+      print('Running flutter pub get...');
+      var result = Process.runSync('flutter', ['pub', 'get']);
+
+      if (result.exitCode != 0) {
+        print(
+          'Warning: flutter pub get failed with exit code ${result.exitCode}',
+        );
+        if (result.stderr.isNotEmpty) {
+          print('Error: ${result.stderr}');
+        }
+        return;
+      }
+
+      // Then run flutter gen-l10n to regenerate localization files
+      print('Running flutter gen-l10n...');
+      result = Process.runSync('flutter', ['gen-l10n']);
+
+      if (result.exitCode == 0) {
+        print('Successfully regenerated localization files.');
+      } else {
+        print(
+          'Warning: flutter gen-l10n failed with exit code ${result.exitCode}',
+        );
+        if (result.stderr.isNotEmpty) {
+          print('Error: ${result.stderr}');
+        }
+        print(
+          'Please run "flutter gen-l10n" manually in the project directory.',
+        );
+      }
+
+      // Restore original directory
+      Directory.current = originalDir;
+    } catch (e) {
+      print('Error regenerating localization files: $e');
+      print(
+        'Please run "flutter gen-l10n" manually in the project directory to regenerate localization files.',
+      );
+    }
+  }
+}
