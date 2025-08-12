@@ -2,8 +2,6 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:interact_cli/interact_cli.dart';
-import 'package:analyzer/dart/analysis/utilities.dart';
-import 'package:analyzer/dart/ast/ast.dart';
 import 'base_analyzer.dart';
 import 'utils.dart';
 
@@ -338,39 +336,6 @@ class UnusedTranslationFinder implements BaseAnalyzer {
     }
 
     return usedKeys;
-  }
-
-  /// Extract all identifiers from the AST
-  void _extractIdentifiers(AstNode node, Set<String> identifiers) {
-    if (node is Identifier) {
-      identifiers.add(node.name);
-    }
-
-    for (final child in node.childEntities) {
-      if (child is AstNode) {
-        _extractIdentifiers(child, identifiers);
-      }
-    }
-  }
-
-  /// Check if a key usage looks like a translation key usage
-  bool _isTranslationKeyUsage(String content, String key) {
-    // Look for the key in context that suggests translation usage
-    final patterns = [
-      RegExp('AppLocalizations\\.of\\([^)]+\\)\\.$key\\b'),
-      RegExp('AppLocalizations\\.of\\([^)]+\\)\\?\\.$key\\b'),
-      RegExp('context\\.translation\\.$key\\b'),
-      RegExp('context\\.tr\\.$key\\b'),
-      RegExp('\\btr\\.$key\\b'),
-    ];
-
-    for (final pattern in patterns) {
-      if (pattern.hasMatch(content)) {
-        return true;
-      }
-    }
-
-    return false;
   }
 
   /// Check if a translation key is used in the given content

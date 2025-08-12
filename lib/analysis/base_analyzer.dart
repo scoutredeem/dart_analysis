@@ -1,5 +1,3 @@
-import 'dart:io';
-
 /// Base interface for all analyzers in the dart_analysis tool
 abstract class BaseAnalyzer {
   /// The name of this analyzer
