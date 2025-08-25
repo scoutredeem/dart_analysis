@@ -1,12 +1,14 @@
 import 'base_analyzer.dart';
 import 'unused_file_finder.dart';
 import 'unused_translation_finder.dart';
+import 'unused_package_finder.dart';
 
 /// Registry for all available analyzers
 class AnalyzerRegistry {
   static final List<BaseAnalyzer> _analyzers = [
     UnusedFileFinder(),
     UnusedTranslationFinder(),
+    UnusedPackageFinder(),
   ];
 
   /// Get all available analyzers

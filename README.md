@@ -22,6 +22,14 @@ A command-line tool to analyze Dart/Flutter projects and find unused files and t
 - Automatically removes unused translation keys
 - Supports multiple localization file patterns
 
+### 📦 Unused Package Finder
+
+- Finds packages declared in pubspec.yaml that are never used
+- Analyzes all Dart files for import statements
+- Identifies both regular and dev dependencies
+- Provides recommendations for package cleanup
+- Helps reduce bundle size and dependency bloat
+
 ## Architecture
 
 The tool is built with a composable architecture:
@@ -86,6 +94,14 @@ dart run bin/dart_analysis.dart /path/to/dart/package
 4. Identifies unused translation keys
 5. Optionally removes them from localization files
 
+### Unused Package Finder
+
+1. Parses pubspec.yaml to extract declared dependencies
+2. Scans all Dart files for package import statements
+3. Identifies packages that are declared but never imported
+4. Provides detailed analysis report with recommendations
+5. Helps optimize project dependencies and reduce bundle size
+
 ## Supported Localization Patterns
 
 The translation finder recognizes these file patterns:
@@ -131,6 +147,7 @@ lib/
 │   ├── analyzer_registry.dart  # Analyzer management
 │   ├── unused_file_finder.dart # Unused file detection
 │   ├── unused_translation_finder.dart # Translation analysis
+│   ├── unused_package_finder.dart # Package dependency analysis
 │   └── utils.dart              # Common utilities
 ├── analysis.dart               # Barrel export file
 └── bin/

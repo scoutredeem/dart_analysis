@@ -5,7 +5,7 @@ void main() {
   group('Analyzer Architecture Tests', () {
     test('AnalyzerRegistry should have analyzers', () {
       expect(AnalyzerRegistry.analyzers, isNotEmpty);
-      expect(AnalyzerRegistry.analyzers.length, equals(2));
+      expect(AnalyzerRegistry.analyzers.length, equals(3));
     });
 
     test('UnusedFileFinder should implement BaseAnalyzer', () {
@@ -19,6 +19,13 @@ void main() {
       final finder = UnusedTranslationFinder();
       expect(finder, isA<BaseAnalyzer>());
       expect(finder.name, equals('Unused translation finder'));
+      expect(finder.description, isNotEmpty);
+    });
+
+    test('UnusedPackageFinder should implement BaseAnalyzer', () {
+      final finder = UnusedPackageFinder();
+      expect(finder, isA<BaseAnalyzer>());
+      expect(finder.name, equals('Unused package finder'));
       expect(finder.description, isNotEmpty);
     });
 
@@ -40,6 +47,7 @@ void main() {
       final options = AnalyzerRegistry.getOptions();
       expect(options, contains('Unused file finder'));
       expect(options, contains('Unused translation finder'));
+      expect(options, contains('Unused package finder'));
     });
 
     test('AnalyzerUtils should have common asset directories', () {
