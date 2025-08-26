@@ -187,12 +187,15 @@ class UnusedFileFinder implements BaseAnalyzer {
 
   /// Handle the unused files (show results and optionally delete)
   void _handleUnusedFiles(Set<String> unusedFiles, String projectPath) {
-    if (unusedFiles.isEmpty) {
+    // Filter out .g.dart files whose parent files are not unused
+    final filteredUnusedFiles = filterGeneratedFiles(unusedFiles);
+
+    if (filteredUnusedFiles.isEmpty) {
       print('No unused files found.');
     } else {
       print('Unused files:');
       final relativeUnused = AnalyzerUtils.formatFilePaths(
-        unusedFiles,
+        filteredUnusedFiles,
         projectPath,
       );
       for (final file in relativeUnused) {
@@ -205,11 +208,90 @@ class UnusedFileFinder implements BaseAnalyzer {
       ).interact();
 
       if (deleteChoice) {
-        _deleteUnusedFiles(unusedFiles, projectPath);
+        _deleteUnusedFiles(filteredUnusedFiles, projectPath);
       } else {
         print('No files were deleted.');
       }
     }
+  }
+
+  /// Filter out .g.dart files whose parent files are not unused
+  Set<String> filterGeneratedFiles(Set<String> unusedFiles) {
+    final filteredFiles = <String>{};
+
+    for (final file in unusedFiles) {
+      if (file.endsWith('.g.dart')) {
+        // For .g.dart files, check if their parent file is also unused
+        final parentFile = findParentFile(file);
+        if (parentFile != null && unusedFiles.contains(parentFile)) {
+          // Only include .g.dart file if its parent is also unused
+          filteredFiles.add(file);
+        }
+        // If parent is not unused, skip this .g.dart file
+      } else {
+        // Non-generated files are included as-is
+        filteredFiles.add(file);
+      }
+    }
+
+    return filteredFiles;
+  }
+
+  /// Find the parent file for a generated .g.dart file
+  String? findParentFile(String generatedFilePath) {
+    try {
+      final file = File(generatedFilePath);
+      if (!file.existsSync()) return null;
+
+      final content = file.readAsStringSync();
+
+      // Look for 'part of' directive to find the parent file
+      if (content.contains('part of')) {
+        final lines = content.split('\n');
+
+        for (final line in lines) {
+          if (line.trim().startsWith('part of')) {
+            // Extract the filename from the part of directive
+            final trimmedLine = line.trim();
+
+            // Try single quotes first
+            var startQuote = trimmedLine.indexOf("'");
+            var endQuote = trimmedLine.lastIndexOf("'");
+
+            // If no single quotes, try double quotes
+            if (startQuote == -1) {
+              startQuote = trimmedLine.indexOf('"');
+              endQuote = trimmedLine.lastIndexOf('"');
+            }
+
+            if (startQuote != -1 && endQuote != -1 && startQuote < endQuote) {
+              final parentFileName = trimmedLine.substring(
+                startQuote + 1,
+                endQuote,
+              );
+
+              if (parentFileName.isNotEmpty) {
+                // Resolve the parent file path relative to the generated file's directory
+                final generatedDir = p.dirname(generatedFilePath);
+                final parentPath = p.join(generatedDir, parentFileName);
+                final absoluteParentPath = p.normalize(p.absolute(parentPath));
+
+                // Check if the parent file exists
+                if (File(absoluteParentPath).existsSync()) {
+                  return absoluteParentPath;
+                }
+              }
+            }
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      // If there's any error reading or parsing the file, return null
+      print('Warning: Could not parse generated file $generatedFilePath: $e');
+    }
+
+    return null;
   }
 
   /// Delete the unused files

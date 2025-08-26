@@ -121,15 +121,24 @@ class UnusedTranslationFinder implements BaseAnalyzer {
 
     // Find all Dart files to analyze for usage
     final allDartFiles = getAllDartFiles(libPath);
+    print(
+      '\n🔍 Analyzing ${allDartFiles.length} Dart files for translation key usage...',
+    );
 
     // Find used translation keys
     final usedKeys = findUsedTranslationKeys(allDartFiles, allTranslationKeys);
     final unusedKeys = allTranslationKeys.difference(usedKeys);
 
     if (unusedKeys.isEmpty) {
-      print('No unused translation keys found.');
+      print(
+        '\n🎉 No unused translation keys found! All translations are being used.',
+      );
     } else {
-      print('\nUnused translation keys:');
+      print('\n📊 Analysis Results:');
+      print('   • Total translation keys: $allTranslationKeys.length');
+      print('   • Used translation keys: $usedKeys.length');
+      print('   • Unused translation keys: $unusedKeys.length');
+      print('\n🗑️  Unused translation keys:');
       final sortedUnusedKeys = unusedKeys.toList()..sort();
       for (final key in sortedUnusedKeys) {
         print('  $key');
@@ -318,8 +327,20 @@ class UnusedTranslationFinder implements BaseAnalyzer {
     Set<String> allKeys,
   ) {
     final usedKeys = <String>{};
+    final totalFiles = dartFiles.length;
+    int processedFiles = 0;
+
+    print('📁 Processing Dart files...');
 
     for (final filePath in dartFiles) {
+      processedFiles++;
+
+      // Show progress every 10 files or at the end
+      if (processedFiles % 10 == 0 || processedFiles == totalFiles) {
+        final progress = ((processedFiles / totalFiles) * 100).round();
+        print('   Progress: $progress% ($processedFiles/$totalFiles files)');
+      }
+
       try {
         final content = File(filePath).readAsStringSync();
 
@@ -335,6 +356,9 @@ class UnusedTranslationFinder implements BaseAnalyzer {
       }
     }
 
+    print(
+      '✅ Analysis complete! Found ${usedKeys.length} used translation keys.',
+    );
     return usedKeys;
   }
 
@@ -385,8 +409,21 @@ class UnusedTranslationFinder implements BaseAnalyzer {
     String projectPath,
   ) {
     int removedCount = 0;
+    final totalFiles = localizationFiles.length;
+    int processedFiles = 0;
+
+    print('\n🗑️  Removing unused translation keys from ARB files...');
+    print('📁 Processing $totalFiles localization files...');
 
     for (final filePath in localizationFiles) {
+      processedFiles++;
+
+      // Show progress every 5 files or at the end
+      if (processedFiles % 5 == 0 || processedFiles == totalFiles) {
+        final progress = ((processedFiles / totalFiles) * 100).round();
+        print('   Progress: $progress% ($processedFiles/$totalFiles files)');
+      }
+
       try {
         final content = File(filePath).readAsStringSync();
         final originalContent = content;
@@ -400,22 +437,27 @@ class UnusedTranslationFinder implements BaseAnalyzer {
         // Only write if content changed
         if (modifiedContent != originalContent) {
           File(filePath).writeAsStringSync(modifiedContent);
-          print('Updated ARB file: ${p.relative(filePath, from: projectPath)}');
+          print('   ✅ Updated: ${p.relative(filePath, from: projectPath)}');
           removedCount++;
+        } else {
+          print(
+            '   ⏭️  No changes: ${p.relative(filePath, from: projectPath)}',
+          );
         }
       } catch (e) {
-        print(
-          'Failed to update: ${p.relative(filePath, from: projectPath)} - $e',
-        );
+        print('   ❌ Failed: ${p.relative(filePath, from: projectPath)} - $e');
       }
     }
 
     if (removedCount > 0) {
-      print('\nRegenerating localization files...');
+      print('\n🔄 Regenerating localization files...');
       _regenerateLocalizationFiles(projectPath);
     }
 
-    print('Translation files updated: $removedCount');
+    print('\n📊 Summary:');
+    print('   • Files processed: $totalFiles');
+    print('   • Files updated: $removedCount');
+    print('   • Unused keys removed: ${unusedKeys.length}');
   }
 
   /// Remove a specific key from ARB content
@@ -487,41 +529,41 @@ class UnusedTranslationFinder implements BaseAnalyzer {
   /// Regenerate localization files using Flutter's localization generation
   void _regenerateLocalizationFiles(String projectPath) {
     try {
-      print('Regenerating localization files...');
+      print('🔄 Regenerating localization files...');
 
       // Change to the project directory
       final originalDir = Directory.current.path;
       Directory.current = projectPath;
 
       // First run flutter pub get to ensure dependencies are up to date
-      print('Running flutter pub get...');
+      print('📦 Running flutter pub get...');
       var result = Process.runSync('flutter', ['pub', 'get']);
 
       if (result.exitCode != 0) {
         print(
-          'Warning: flutter pub get failed with exit code ${result.exitCode}',
+          '⚠️  Warning: flutter pub get failed with exit code ${result.exitCode}',
         );
         if (result.stderr.isNotEmpty) {
-          print('Error: ${result.stderr}');
+          print('❌ Error: ${result.stderr}');
         }
         return;
       }
 
       // Then run flutter gen-l10n to regenerate localization files
-      print('Running flutter gen-l10n...');
+      print('🔧 Running flutter gen-l10n...');
       result = Process.runSync('flutter', ['gen-l10n']);
 
       if (result.exitCode == 0) {
-        print('Successfully regenerated localization files.');
+        print('✅ Successfully regenerated localization files.');
       } else {
         print(
-          'Warning: flutter gen-l10n failed with exit code ${result.exitCode}',
+          '⚠️  Warning: flutter gen-l10n failed with exit code ${result.exitCode}',
         );
         if (result.stderr.isNotEmpty) {
-          print('Error: ${result.stderr}');
+          print('❌ Error: ${result.stderr}');
         }
         print(
-          'Please run "flutter gen-l10n" manually in the project directory.',
+          '💡 Please run "flutter gen-l10n" manually in the project directory.',
         );
       }
 

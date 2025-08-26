@@ -162,24 +162,46 @@ class UnusedPackageFinder implements BaseAnalyzer {
       return usedPackages;
     }
 
-    // Use analyzer to parse Dart files
-    final collection = AnalysisContextCollection(
-      includedPaths: [projectPath],
-      resourceProvider: PhysicalResourceProvider.INSTANCE,
-    );
+    // Ensure the project path is properly normalized (no trailing slash)
+    final normalizedProjectPath = path.normalize(projectPath);
 
-    for (final filePath in dartFiles) {
-      try {
-        final context = collection.contextFor(filePath);
-        final result = context.currentSession.getParsedUnit(filePath);
+    // Try using analyzer first
+    try {
+      final collection = AnalysisContextCollection(
+        includedPaths: [normalizedProjectPath],
+        resourceProvider: PhysicalResourceProvider.INSTANCE,
+      );
 
-        if (result is ParsedUnitResult) {
-          final imports = _extractImports(result);
-          usedPackages.addAll(imports);
+      for (final filePath in dartFiles) {
+        try {
+          final context = collection.contextFor(filePath);
+          final result = context.currentSession.getParsedUnit(filePath);
+
+          if (result is ParsedUnitResult) {
+            final imports = _extractImports(result);
+            usedPackages.addAll(imports);
+          }
+        } catch (e) {
+          // Skip files that can't be parsed by analyzer
+          continue;
         }
-      } catch (e) {
-        // Skip files that can't be parsed
-        continue;
+      }
+    } catch (e) {
+      // Analyzer failed, fall back to text parsing
+      print('   ⚠️  Analyzer failed, falling back to text parsing: $e');
+    }
+
+    // If analyzer didn't find any packages, use fallback text parsing
+    if (usedPackages.isEmpty) {
+      print('   🔍 Using fallback text parsing for package imports...');
+      for (final filePath in dartFiles) {
+        try {
+          final imports = _extractImportsFromText(filePath);
+          usedPackages.addAll(imports);
+        } catch (e) {
+          // Skip files that can't be read
+          continue;
+        }
       }
     }
 
@@ -189,11 +211,27 @@ class UnusedPackageFinder implements BaseAnalyzer {
   /// Find all Dart files in the project
   List<String> _findDartFiles(String projectPath) {
     final dartFiles = <String>[];
-    final dir = Directory(projectPath);
 
-    if (!dir.existsSync()) return dartFiles;
+    // For Flutter/Dart projects, focus on the lib directory
+    final libDir = Directory(path.join(projectPath, 'lib'));
+    if (libDir.existsSync()) {
+      _scanDirectory(libDir, dartFiles);
+    }
 
-    _scanDirectory(dir, dartFiles);
+    // Also check for test files
+    final testDir = Directory(path.join(projectPath, 'test'));
+    if (testDir.existsSync()) {
+      _scanDirectory(testDir, dartFiles);
+    }
+
+    // Check for integration test files
+    final integrationTestDir = Directory(
+      path.join(projectPath, 'integration_test'),
+    );
+    if (integrationTestDir.existsSync()) {
+      _scanDirectory(integrationTestDir, dartFiles);
+    }
+
     return dartFiles;
   }
 
@@ -209,7 +247,8 @@ class UnusedPackageFinder implements BaseAnalyzer {
           if (!dirName.startsWith('.') &&
               dirName != 'build' &&
               dirName != 'node_modules' &&
-              dirName != '.dart_tool') {
+              dirName != '.dart_tool' &&
+              dirName != 'generated') {
             _scanDirectory(entity, dartFiles);
           }
         }
@@ -243,6 +282,38 @@ class UnusedPackageFinder implements BaseAnalyzer {
     // package:package_name/file.dart -> package_name
     final match = RegExp(r'^package:([^/]+)/').firstMatch(uri);
     return match?.group(1);
+  }
+
+  /// Extract package imports from text content (fallback method)
+  Set<String> _extractImportsFromText(String filePath) {
+    final packages = <String>{};
+
+    try {
+      final file = File(filePath);
+      if (!file.existsSync()) {
+        return packages;
+      }
+
+      final content = file.readAsStringSync();
+      final lines = content.split('\n');
+
+      for (final line in lines) {
+        final trimmedLine = line.trim();
+        if (trimmedLine.startsWith("import 'package:")) {
+          final match = RegExp(
+            r"^import\s+\'package:([^/]+)/",
+          ).firstMatch(trimmedLine);
+          final packageName = match?.group(1);
+          if (packageName != null) {
+            packages.add(packageName);
+          }
+        }
+      }
+    } catch (e) {
+      // Skip files that can't be read
+    }
+
+    return packages;
   }
 
   /// Generate and display the analysis report
