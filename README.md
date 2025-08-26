@@ -1,6 +1,6 @@
 # Dart Analysis Tool
 
-A command-line tool to analyze Dart/Flutter projects and find unused files and translation strings.
+A command-line tool to analyze Dart/Flutter projects and find unused files translation strings, and unused package dependencies.
 
 ## Features
 
@@ -54,27 +54,20 @@ dart pub get
 ### Basic Usage
 
 ```bash
-# Analyze a project
-dart run bin/dart_analysis.dart /path/to/your/project
-
-# Show help
-dart run bin/dart_analysis.dart --help
-
-# Show version
-dart run bin/dart_analysis.dart --version
+# Activate globally
+dart pub global activate --source=path .
 ```
 
-### Examples
+**Now you can use "dart_analysis" command in your terminal anywhere in your computer.**
+
+### Example
 
 ```bash
 # Analyze current directory
-dart run bin/dart_analysis.dart .
+dart_analysis .
 
-# Analyze a Flutter project
-dart run bin/dart_analysis.dart /path/to/flutter/app
-
-# Analyze a Dart package
-dart run bin/dart_analysis.dart /path/to/dart/package
+# Analyze a specific directory
+dart_analysis /path/to/your/flutter_project
 ```
 
 ## How It Works
